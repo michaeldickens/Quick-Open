@@ -76,8 +76,10 @@ pair. If condition is given, only traverses directories such that
 	  (cond
 	   ((or (string= curr ".")
 		(string= curr "..")
-		(and (functionp condition)
-		     (not (funcall condition curr))))
+		;; TODO: this never actually calls condition
+		;; (and (functionp condition)
+		;;      (not (funcall condition curr))))
+		)
 	    nil)
 	   ((file-directory-p path)
 	    (dolist (x (directory-files path))
@@ -181,7 +183,7 @@ the absolute paths of files with those names, excluding the filename
 	       *quick-open-file-db*))))
 
 ;; TODO: Make this more sophisticated, where the user can write
-;; regular expressions to match files.
+;; TODO: Don't re-open the ignore file every time this is called.
 (defun* quick-open-index-condition (filename)
   "Ignores any files or directories in the ignore file. Returns t if
 there are no matches and nil if there is a match (i.e. the return
