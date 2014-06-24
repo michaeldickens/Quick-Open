@@ -4,9 +4,21 @@
 ;;;; Created by Michael Dickens on 2013-06-21.
 ;;;; 
 ;;;; A utility for quickly finding and opening a file.
+;;;;
+;;;; IDO's ido-find-file is way better than this, so just use that
+;;;; instead.
 ;;;; 
 
-;; TODO: remove files from the database when they no longer exist
+;; TODO: Byte-compile this into a .elc to make it run faster
+;; TODO: Optimize this to make it run faster
+;; TODO: Tab completion
+;; TODO: Add feature where if there are multiple hits, you can type in
+;; part of the file path for the hit you want
+;; TODO: Recognize identical file paths
+;; TODO: Research indexing and make quick-open's indexing more efficient
+
+;; Change this to whatever path to `data` you want to use.
+(defconst *quick-open-path* "~/.emacs.d/mdickens/quick-open/data")
 
 ;;;; 
 ;;;; General helper functions
@@ -28,7 +40,7 @@
    (with-temp-file filename
      (insert string)))
 
-(defun add-line-to-file (line filename)
+(defun line-to-file (line filename)
   (write-string-to-file
    (reduce (lambda (str x) (concat str x "\n"))
 	   (nconc (read-list-from-file filename "\n") (list line))
@@ -39,6 +51,14 @@
   (if (equal "/" (substring dir -1 (length dir)))
       (concat dir filename)
       (concat dir "/" filename)))
+
+(defun split-path-and-filename (path)
+  "Given a path, returns a pair containing the path minus the filename
+  and the filename itself."
+  (let ((index (search "/" path :from-end t)))
+    (list (substring path 0 index)
+          (substring path (1+ index)))))
+
 
 (defun join-pairs-in-list (xs)
   "Given a list xs, joins each two consecutive elements into a
@@ -99,8 +119,6 @@ pair. If condition is given, only traverses directories such that
 
 (defconst *seconds-per-day* 86400)
 
-(defconst *quick-open-path* "~/.emacs.d/mdickens/quick-open/data")
-
 (defconst *quick-open-path-divider* "\n"
   "Divides the path and filename in the file database.")
 (defconst *quick-open-file-db-name* 
@@ -147,11 +165,6 @@ the absolute paths of files with those names, excluding the filename
 (defun make-path-for-db (path filename)
   (concat path *quick-open-path-divider* filename))
 
-(defun split-path-for-db (pair)
-  "Takes a directory/path pair from an index database and splits it
-  up. Returns the directory and path in a list." 
-  (split-string pair *quick-open-path-divider*))
-
 (defun quick-open-init-db ()
   (when (null *quick-open-file-db*)
     (setq *quick-open-file-db* (make-hash-table :test 'equal))
@@ -180,7 +193,13 @@ the absolute paths of files with those names, excluding the filename
   (let ((path-list (gethash filename *quick-open-file-db*)))
     (unless (member path path-list)
       (puthash filename (cons path path-list)
-	       *quick-open-file-db*))))
+               *quick-open-file-db*))))
+
+(defun quick-open-remove-file-from-db (path filename)
+  (let ((path-list (gethash filename *quick-open-file-db*)))
+    (if (member path path-list)
+        (puthash filename (remove path path-list)
+                 *quick-open-file-db*))))
 
 ;; TODO: Make this more sophisticated, where the user can write
 ;; TODO: Don't re-open the ignore file every time this is called.
@@ -189,9 +208,6 @@ the absolute paths of files with those names, excluding the filename
 there are no matches and nil if there is a match (i.e. the return
 value indicates whether to read the file)."
   (not (member filename (quick-open-get-ignore))))
-
-(defun quick-open-wrapup ()
-  (quick-open-write-db))
 
 (defun quick-open-index-dir (path)
   "Index the given directory."
@@ -208,7 +224,8 @@ value indicates whether to read the file)."
       (quick-open-index-dir dir))
     (write-string-to-file 
      (format "%f" (float-time))
-     *quick-open-last-modified-name*)))
+     *quick-open-last-modified-name*)
+    (message "Done.")))
 
 
 (defun quick-open-search (filename) 
@@ -240,6 +257,15 @@ value indicates whether to read the file)."
       (quick-open-index-directories)
       (quick-open filename))))
 
+(defun quick-open-find-file (path filename)
+  "Tries to open the given file. If it is not found, calls
+quick-open-file-not-found."
+  (let ((full-filename (make-path path filename)))
+    (if (file-exists-p full-filename)
+        (find-file full-filename)
+      (quick-open-remove-file-from-db path filename)
+      (message "File not found."))))
+
 (defun quick-open-choose-file (paths filename)
   "Given a list of paths and a shared filename, prompt the user to choose
   which file to open."
@@ -266,7 +292,7 @@ value indicates whether to read the file)."
 	 (read-from-minibuffer 
 	  (concat numbered-file-list 
 		  "\nInvalid input. Please try again: ")))))
-    (find-file (make-path (nth (1- filenum) paths) filename))))
+    (quick-open-find-file (nth (1- filenum) paths) filename)))
 
 (defun quick-open (filename)
   (interactive "sQuick open: ")
@@ -274,23 +300,26 @@ value indicates whether to read the file)."
   (let ((paths (quick-open-db-query filename)))
     (cond
      ((= (length paths) 1)
-      (find-file (make-path (car paths) filename)))
+      (quick-open-find-file (car paths) filename))
      ((null paths)
       (quick-open-file-not-found filename))
      (t
       (quick-open-choose-file paths filename)))))
 
-;; TODO: for some reason it always says test.lisp is not found, even
-;; though it is in the database file. This also happens for other
-;; files. Even after calling quick-open for the first time,
-;; *quick-open-file-db* appears to be empty.
+(defun quick-open-wrapup ()
+  (quick-open-write-db))
 
 ;;;; 
 ;;;; Initialization routines
-;;;; 
+;;;;
+
+;; When a file is opened, add it to the file db.
+;; TODO: Test this.
+(add-hook 'find-file-hook
+          (lambda ()
+            (quick-open-init-db)
+            (apply 'quick-open-add-file-to-db
+             (split-path-and-filename (buffer-file-name)))))
 
 ;; Evaluate (quick-open-wrapup) when Emacs quits.
 (add-hook 'kill-emacs-hook 'quick-open-wrapup)
-
-
-
